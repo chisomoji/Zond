@@ -1,0 +1,43 @@
+(define-data-var bond-id-nonce uint u0)
+(define-map bonds uint { owner: principal, amount: uint, matures-at: uint, redeemed: bool })
+
+(define-constant yield-bps u500)
+(define-constant bps-denominator u10000)
+(define-constant max-amount u1000000000000)
+(define-constant max-lock-period u52500)
+
+(define-private (calc-yield (amount uint))
+  (/ (* amount yield-bps) bps-denominator)
+)
+
+(define-public (issue-bond (amount uint) (lock-period uint))
+  (let (
+    (id (var-get bond-id-nonce))
+    (maturity (+ burn-block-height lock-period))
+  )
+    (asserts! (> amount u0) (err u103))
+    (asserts! (<= amount max-amount) (err u104))
+    (asserts! (> lock-period u0) (err u105))
+    (asserts! (<= lock-period max-lock-period) (err u106))
+    (try! (contract-call? .sbtc-token transfer amount tx-sender (as-contract tx-sender) none))
+    (map-set bonds id { owner: tx-sender, amount: amount, matures-at: maturity, redeemed: false })
+    (var-set bond-id-nonce (+ id u1))
+    (ok id)
+  )
+)
+
+(define-public (redeem (id uint))
+  (let (
+    (bond (unwrap! (map-get? bonds id) (err u404)))
+    (yield (calc-yield (get amount bond)))
+    (payout (+ (get amount bond) yield))
+  )
+    (asserts! (is-eq tx-sender (get owner bond)) (err u102))
+    (asserts! (>= burn-block-height (get matures-at bond)) (err u100))
+    (asserts! (not (get redeemed bond)) (err u101))
+    ;; Transfer principal + yield back
+    (try! (as-contract (contract-call? .sbtc-token transfer payout tx-sender (get owner bond) none)))
+    (map-set bonds id (merge bond { redeemed: true }))
+    (ok payout)
+  )
+)
